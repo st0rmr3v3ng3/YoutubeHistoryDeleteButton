@@ -1,4 +1,4 @@
-# YT History Delete BTN
+# Youtube History Delete Button
 
 A small userscript for **Tampermonkey / Violentmonkey** that adds a **big red “Remove from watch history” button** next to every entry on YouTube’s watch history page!
 
