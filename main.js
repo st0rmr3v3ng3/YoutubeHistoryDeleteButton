@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YT History Delete BTN
 // @namespace    https://github.com/st0rmr3v3ng3/YoutubeHistoryDeleteButton/
-// @version      0.6
+// @version      0.9
 // @description  Create "Remove from watch history" button beside each history item and style it as a big red square.
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -11,49 +11,149 @@
 (function () {
   'use strict';
 
-  const BTN_SIZE = 138; //px
+  // =======================================================================
+  // ADAPTERS: Centralized YouTube DOM Configuration
+  // =======================================================================
+  const YTAdapter = {
+    selectors: {
+      entryUnprocessed: 'yt-lockup-view-model.ytLockupViewModelWrapper:not([data-bigdelete-added])',
+      moreButton: '.ytLockupMetadataViewModelMenuButton button',
+      popupToHide: 'tp-yt-iron-dropdown:has(yt-sheet-view-model.ytSheetViewModelContextual)',
+      popupContainer: 'ytd-popup-container',
+      menuItem: 'yt-list-item-view-model'
+    },
+    icons: {
+      remove: "M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z"
+    },
+
+    isHistoryPage: () => location.pathname.startsWith('/feed/history'),
+    getUnprocessedEntries: () => document.querySelectorAll(YTAdapter.selectors.entryUnprocessed),
+    getContainer: (entry) => entry.firstElementChild,
+    getMoreButton: (entry) => entry.querySelector(YTAdapter.selectors.moreButton),
+    getPopupToHide: () => document.querySelector(YTAdapter.selectors.popupToHide),
+    getPopupContainer: () => document.querySelector(YTAdapter.selectors.popupContainer),
+
+    getRemoveItem: (popupContainer) => {
+      if (!popupContainer) return null;
+      const items = Array.from(popupContainer.querySelectorAll(YTAdapter.selectors.menuItem));
+      return items.find(el => el.querySelector(`path[d="${YTAdapter.icons.remove}"]`));
+    }
+  };
+
+  // =======================================================================
+  // UTILITY: Browser View Anchor (Prevent DOM Rollercoasters)
+  // =======================================================================
+  const ViewAnchor = {
+    isLocked: false,
+    lockedY: 0,
+    duration: 500, // Wait out the server network request
+
+    // Store original browser functions
+    origFocus: HTMLElement.prototype.focus,
+    origScrollIntoView: Element.prototype.scrollIntoView,
+
+    releaseLock() {
+      if (!ViewAnchor.isLocked) return;
+      ViewAnchor.isLocked = false;
+
+      // Restore natural browser behavior
+      document.documentElement.style.removeProperty('scroll-behavior');
+      document.body.style.removeProperty('scroll-behavior');
+      HTMLElement.prototype.focus = ViewAnchor.origFocus;
+      Element.prototype.scrollIntoView = ViewAnchor.origScrollIntoView;
+
+      // Remove manual override listeners
+      window.removeEventListener('wheel', ViewAnchor.userInterrupt);
+      window.removeEventListener('touchmove', ViewAnchor.userInterrupt);
+    },
+
+    userInterrupt(e) {
+      // If the user physically scrolls, drop the lock immediately to prevent stutter
+      if (e.isTrusted) {
+        ViewAnchor.releaseLock();
+      }
+    },
+
+    execute(actionFn) {
+      if (this.isLocked) return;
+      this.isLocked = true;
+      this.lockedY = window.scrollY;
+
+      // 1. Kill CSS smooth scrolling globally
+      document.documentElement.style.setProperty('scroll-behavior', 'auto', 'important');
+      document.body.style.setProperty('scroll-behavior', 'auto', 'important');
+
+      // 2. Neuter YouTube's accessibility focus routing
+      HTMLElement.prototype.focus = function(options) {
+        return ViewAnchor.origFocus.call(this, { ...options, preventScroll: true });
+      };
+
+      // 3. Neuter scrollIntoView completely
+      Element.prototype.scrollIntoView = function() {};
+
+      // 4. Aggressive Frame-by-Frame Pinning
+      const pinScroll = () => {
+        if (!this.isLocked) return;
+        if (window.scrollY !== this.lockedY) {
+          window.scrollTo({ left: 0, top: this.lockedY, behavior: 'instant' });
+        }
+        requestAnimationFrame(pinScroll);
+      };
+      requestAnimationFrame(pinScroll);
+
+      // 5. Allow user to break the lock if they want to scroll away
+      window.addEventListener('wheel', this.userInterrupt, { passive: true });
+      window.addEventListener('touchmove', this.userInterrupt, { passive: true });
+
+      // Execute the actual click
+      actionFn();
+
+      // Auto-release after the network request window safely closes
+      setTimeout(() => this.releaseLock(), this.duration);
+    }
+  };
+
+  // =======================================================================
+  // CORE UI & LOGIC
+  // =======================================================================
+  const BTN_SIZE = 138;
   const ADD_DELAY = 500;
 
-  const style = document.createElement('style');
-  style.textContent = `
-    .yt-big-delete {
-      background: red !important;
-      cursor: pointer;
-      width: ${BTN_SIZE}px;
-      height: ${BTN_SIZE}px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-weight: bold;
-      font-size: 20px;
-      border-radius: 4px;
-      transition: background 0.2s, opacity 0.2s;
-      margin-left: 8px;
-    }
-    .yt-big-delete:hover {
-      background: #b00000 !important;
-    }
-  `;
-  document.head.appendChild(style);
-  
-  // Define exact SVG icon data for the "Remove" trash can icon for the "Remove from watch history"
-  const removeIconPath = "M19 3h-4V2a1 1 0 00-1-1h-4a1 1 0 00-1 1v1H5a2 2 0 00-2 2h18a2 2 0 00-2-2ZM6 19V7H4v12a4 4 0 004 4h8a4 4 0 004-4V7h-2v12a2 2 0 01-2 2H8a2 2 0 01-2-2Zm4-11a1 1 0 00-1 1v8a1 1 0 102 0V9a1 1 0 00-1-1Zm4 0a1 1 0 00-1 1v8a1 1 0 002 0V9a1 1 0 00-1-1Z";
-
-  function isHistoryPage() {
-    return location.pathname.startsWith('/feed/history');
+  function injectStyles() {
+    const style = document.createElement('style');
+    style.textContent = `
+      .yt-big-delete {
+        background: red !important;
+        cursor: pointer;
+        width: ${BTN_SIZE}px;
+        height: ${BTN_SIZE}px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        font-size: 20px;
+        border-radius: 4px;
+        transition: background 0.2s, opacity 0.2s;
+        margin-left: 8px;
+        flex-shrink: 0;
+      }
+      .yt-big-delete:hover {
+        background: #b00000 !important;
+      }
+    `;
+    document.head.appendChild(style);
   }
 
   function addButtons() {
-    if (!isHistoryPage()) return;
+    if (!YTAdapter.isHistoryPage()) return;
 
-    const entries = document.querySelectorAll(
-      'yt-lockup-view-model.ytLockupViewModelWrapper:not([data-bigdelete-added])' 
-    );
+    const entries = YTAdapter.getUnprocessedEntries();
 
     entries.forEach(entry => {
       entry.setAttribute('data-bigdelete-added', '1');
-      const container = entry.firstElementChild;
+
+      const container = YTAdapter.getContainer(entry);
       if (!container) return;
 
       const btn = document.createElement('div');
@@ -65,35 +165,29 @@
         e.stopPropagation();
         e.preventDefault();
 
-        const moreBtn = entry.querySelector('.ytLockupMetadataViewModelMenuButton button');
-        if (!moreBtn){
-          console.log('ytLockupMetadataViewModelMenuButton not found (structure)');
-          return;
-        };
+        const moreBtn = YTAdapter.getMoreButton(entry);
+        if (!moreBtn) return;
 
-        // make popup temporarily invisible and click-through
-        const popup = document.querySelector('tp-yt-iron-dropdown:has(yt-sheet-view-model.ytSheetViewModelContextual)');
+        const popup = YTAdapter.getPopupToHide();
         if (popup) {
           popup.style.pointerEvents = 'none';
           popup.style.opacity = '0';
         }
 
-        // open menu (needed for Polymer to attach the remove item)
         moreBtn.click();
-        await new Promise(res => setTimeout(res, 50));
+        await new Promise(res => setTimeout(res, 25));
 
-        const popupNow = document.querySelector('ytd-popup-container');
-        const items = [...popupNow.querySelectorAll('yt-list-item-view-model')];
-        const removeItem = items.find(el => {
-          return el.querySelector(`path[d="${removeIconPath}"]`); // remove button detection should be more robust now, based on the SVG
-        });
+        const popupNow = YTAdapter.getPopupContainer();
+        const removeItem = YTAdapter.getRemoveItem(popupNow);
 
         if (removeItem) {
-          removeItem.click();
-          entry.remove();
+          ViewAnchor.execute(() => {
+            removeItem.click();
+            entry.style.opacity = '0.3'; // Visual feedback instead of instant removal
+            entry.style.pointerEvents = 'none';
+          });
         }
 
-        // restore popup visibility
         if (popupNow) {
           popupNow.style.opacity = '';
           popupNow.style.pointerEvents = '';
@@ -102,32 +196,30 @@
     });
   }
 
-  // Observe DOM changes for new entries
-  const observer = new MutationObserver(() => {
-    if (isHistoryPage()) addButtons();
-  });
-  observer.observe(document.body, { childList: true, subtree: true });
-
-  // Also periodically recheck (YT lazy-load)
-  setInterval(() => {
-    if (isHistoryPage()) addButtons();
-  }, ADD_DELAY);
-
-  // Detect SPA navigation changes
   function onNavigationChange() {
-    if (isHistoryPage()) {
+    if (YTAdapter.isHistoryPage()) {
       addButtons();
     } else {
-      // Clean up any leftover buttons when leaving history
       document.querySelectorAll('.yt-big-delete').forEach(el => el.remove());
     }
   }
 
+  // =======================================================================
+  // INITIALIZATION
+  // =======================================================================
+  injectStyles();
+
+  const observer = new MutationObserver(() => {
+    if (YTAdapter.isHistoryPage()) addButtons();
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+
+  setInterval(() => {
+    if (YTAdapter.isHistoryPage()) addButtons();
+  }, ADD_DELAY);
+
   window.addEventListener('yt-navigate-finish', onNavigationChange);
   window.addEventListener('yt-page-data-updated', onNavigationChange);
 
-  // Initial run
   onNavigationChange();
-
-  console.log('YT history delete mover loaded');
 })();
