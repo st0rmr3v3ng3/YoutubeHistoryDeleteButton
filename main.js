@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YT History Delete BTN
 // @namespace    https://github.com/st0rmr3v3ng3/YoutubeHistoryDeleteButton/
-// @version      0.9
+// @version      0.91
 // @description  Create "Remove from watch history" button beside each history item and style it as a big red square.
 // @match        https://www.youtube.com/*
 // @run-at       document-idle
@@ -12,7 +12,7 @@
   'use strict';
 
   // =======================================================================
-  // ADAPTERS: Centralized YouTube DOM Configuration
+  // ADAPTER: Centralized YouTube DOM Configuration
   // =======================================================================
   const YTAdapter = {
     selectors: {
@@ -41,12 +41,12 @@
   };
 
   // =======================================================================
-  // UTILITY: Browser View Anchor (Prevent DOM Rollercoasters)
+  // UTILITY: Browser View Anchor (Prevent Rollercoasters)
   // =======================================================================
   const ViewAnchor = {
     isLocked: false,
     lockedY: 0,
-    duration: 500, // Wait out the server network request
+    duration: 50, // Wait out the server network request
 
     // Store original browser functions
     origFocus: HTMLElement.prototype.focus,
@@ -183,8 +183,7 @@
         if (removeItem) {
           ViewAnchor.execute(() => {
             removeItem.click();
-            entry.style.opacity = '0.3'; // Visual feedback instead of instant removal
-            entry.style.pointerEvents = 'none';
+            entry.remove();
           });
         }
 
